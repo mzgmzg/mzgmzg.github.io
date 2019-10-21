@@ -1,0 +1,2 @@
+# mzgmzg.github.io
+blog
