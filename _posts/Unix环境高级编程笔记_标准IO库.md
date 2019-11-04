@@ -1,0 +1,662 @@
+---
+uyelayout: post
+titile: Unix环境高级编程笔记_标准IO库
+---
+
+不仅是Unix，其他很多操作系统都实现了标准IO库。
+
+  
+
+### 流和FILE对象
+
+  
+
+对于ASCII字符集，一个字符用一个字节表示。对于国际字符集，一个字符可用多个字节表示。标准I/O文件流可用于单字节或多字节（“宽”）字符集。流的定向(stream's orientation)决定了所读、写的字符是单字节还是多字节的。当一个流最初被创建时，它并没有定向。如若在未定向的流上使用一个多字节IO函数（见<wchar.h>），则讲该流的定向设置为宽定向的。若在未定向的流上使用一个单字节IO函数，则将该流的定向设为字节定向的。只有两个函数可以改变流的定向。freopen函数（稍后讨论）清除一个流的定向；fwide函数可用于设置流的定向。  
+
+  
+
+```c
+#include <stdio.h>
+#include <wchar.h>
+
+int fwide(FILE* fp, int mode);
+/* 返回值：若流是宽定向的，返回正值；若流是字节定向的，返回负值；若流是未定向的，返回0 */
+```
+
+  
+
+根据mode参数的不同值，fwide函数执行不同的工作。
+
+- 如若mode参数值为负，fwide将试图使指定的流是字节定向的。
+- 如若mode参数值为正，fwide将试图使指定的流是宽定向的。
+- 如若mode参数值为0，fwide将不试图设置流的定向，但返回标示该流定向的值。  
+
+  
+
+注意，fwide并不改变已定向流的定向。还应注意的是，fwide无出错返回。试想，如若流是无效的，那么将发生什么呢？我们唯一可依靠的是，调用fwide前先清除errno，从fwide返回时检查errno的值。  
+
+   
+
+当打开一个流时，标准IO函数fopen返回一个指向FILE对象的指针。该对象通常是一个结构，它包含了标准IO库为管理该流需要的所有信息，包括用于实际IO的文件描述符、指向用于该流缓冲区的指针、缓冲区的长度、当前在缓冲区中的字符数以及出错标志等。  
+
+  
+
+应用程序没有必要检验FILE对象。为了引用一个流，需将FILE指针作为参数传递给每个标准IO函数。其后称指向FILE对象的指针（类型为FILE *）为文件指针。  
+
+  
+
+  
+
+  
+
+### 标准输入、标准输出和标准错误
+
+对一个进程预定义了3个流，并且这3个流可以自动地被进程使用，它们是：标准输入、标准输出和标准错误。这些流引用的文件与文件描述符STDIN_FILENO、STDOUT_FILENO、STDERR_FILENO所引用的相同。  
+
+  
+
+这3个标准IO流通过预定义文件指针stdin、stdout、stderr加以引用。这3个文件指针定义在头文件<stdio.h>中。  
+
+  
+
+  
+
+  
+
+### 缓冲
+
+标准IO库提供缓冲的目的是尽可能减少使用read和write调用的次数。它也对每个IO流自动地进行缓冲管理，从而避免了应用程序需要考虑这一点缩到来的麻烦。遗憾的是，标准IO库最令人疑惑的也是它的缓冲。  
+
+   
+
+标准IO提供了以下三种类型的缓冲：  
+
+1. 全缓冲。在这种情况下，在填满标准IO缓冲区后才进行实际IO操作。对于驻留在磁盘上的文件通常是由标准IO库实施全缓冲的。在一个流上执行一次IO操作时，相关标准IO函数通常使用malloc获得需使用的缓冲区。术语冲洗（flush）说明标准IO缓冲区的写操作。缓冲区可由标准IO例程自动地冲洗（例如。当填满一个缓冲区时），或者可以调用函数fflush冲洗一个流。值得注意的是，在UNIX环境中，flush有两种意思。在标准IO库方面，flush（冲洗）意味着将缓冲区中的内容写到磁盘上（该缓冲区可能只是部分填满的）。在终端驱动程序方面，flush表示丢弃已存储在缓冲区中的数据。
+2. 行缓冲。在这种情况下，当在输入和输出中遇到换行符时，标准IO库执行IO操作。这允许我们一次输出一个字符（用标准IO函数fputc）。但只有在写了一行之后才进行实际IO操作。当流设计一个终端时（如标准输入和标准输出），通常使用行缓冲。对于行缓冲有两个限制。第一，因为标准IO库用来收集每一行的缓冲区的长度是固定的，所以只要填满了缓冲区，那么即使还没有写一个换行符，也进行IO操作。第二，任何时候只要通过标准IO库要求从(a)一个不带缓冲的流，或者(b)一个行缓冲的流（它从内核请求需要数据）得到输入数据，那么就会冲洗所有行缓冲输出流，它并不要求一定从内核读数据。很明显，从一个不带缓冲的流中输入（即(a)项）需要从内核获得数据。
+3. 不带缓冲。标准IO库不对字符进行缓冲存储。例如，若用标准IO函数fputs写15个字符到不带缓冲的流中，我们就期望这15个字符能立即输出，很可能使用write函数将这些字符写到相关联的打开文件中。标准错误流stderr通常是不带缓冲的，这就使得出错信息可以尽快显示出来，而不管他们是否含有一个换行符。
+
+   
+
+但是，这并没有告诉我们如果标准输入和标准输出指向交互式设备时，它们是不带缓冲的还是行缓冲的；以及错误是不带缓冲的还是行缓冲的。很多系统默认使用下列类型的缓冲：  
+
+- 标准错误是不带缓冲的。
+- 若是指向终端设备的流，则是行缓冲的；否则是全缓冲的。
+
+  
+
+对于一个给定的流，如果我们并不喜欢这些系统默认，则可调用下列两个函数中的一个更改缓冲类型。
+
+```c
+#include <stdio.h>
+
+void setbuf(FILE* restrict fp, char* restrict buf);
+int setvbuf(FILE* restrict fp, char* restrict buf, int mode, size_t size);
+/* 返回值：若成功，返回0；若出错，返回非0 */
+```
+
+  
+
+这些函数一定要在流已经被打开后调用，而且也应在对该流执行任何一个其他操作之前调用。  
+
+  
+
+  
+
+使用setvbuf，我们可以精确地说明所需的缓冲类型。这是用mode参数实现的：  
+
+_IOFBF       全缓冲  
+
+_IOLBF       行缓冲  
+
+_IONBF      不缓冲  
+
+  
+
+如果指定一个不带缓冲的流，则忽略buf 和size参数。如果指定全缓冲或行缓冲，则buf和size可选择地制定一个缓冲区及其长度。如果该流是带缓冲的，而buf是NULL，则标准IO库将自动地为该流分配适当长度的缓冲区。适当长度指的是由敞亮BUFSIZ所指定的值。  
+
+> 某些C函数库实现使用stat结构中的成员st_blksize所指定的值决定最佳IO缓冲区长度。GUN C函数库就使用这种方法。
+
+  
+
+任何时候，我们都可以前置冲洗一个流。  
+
+```c
+#include <stdio.h>
+
+int fflush(FILE* fp);
+/* 返回值：若成功，返回0；若出错，返回值EOF */
+```
+
+此函数使该流所有未写的数据都被传送至内核。作为一种特殊情形，如果fp是NULL，则此函数将导致所有输出流被冲洗。  
+
+  
+
+  
+
+  
+
+### 打开流
+
+下列3个函数打开一个标准流。  
+
+```c
+#include <stdio.h>
+
+FILE* fopen(const char *restrict pathname, const char *restrict type);
+FILE* freopen(const char *restrict pathname, const char *restrict type, FILE* restrict fp);
+FILE* fdopen(int fd, const char *type);
+/* 3个函数的返回值：若成功，返回文件指针；若出错，返回NULL */
+```
+
+  
+
+这3个函数的区别如下：  
+
+1. fopen函数打开路径名为pathname的一个指定文件。
+2. freopen函数在一个指定的流上打开一个指定的文件，如若该流已经打开，则先关闭该流。若该流已经定向，则使用freopen清除该定向。此函数一般用于将一个制定的文件打开为一个预定义的流：标准输入、标准输出和标准错误。
+3. fdopen函数取一个已有的文件描述符（我们可能从open、dup、dup2、fcntl、pipe、sockesocketpair或accept函数得到此文件描述符），并使一个标准的IO流与该描述符相结合。此函数常用于由常见管道和网络通信通道函数返回的描述符。因为这些特殊类型的文件不能用标准IO函数打开，所以我们必须先调用设备专用函数以获得一个文件描述符，然后用fdopen使一个标准IO流与该描述符相结合。  
+
+> fopen接freopen是ISO C的所属部分。而ISO C并不涉及文件描述符，所以仅有POSIX.1具有fdopen。
+
+  
+
+type参数制定对该IO流的读写方式，ISO C规定type参数可以有15种不同的值。  
+
+| type         | 说明                                   | open(2)标志                 |
+| ------------ | -------------------------------------- | --------------------------- |
+| r或rb        | 为读而打开                             | O_RDONY                     |
+| w或wb        | 把文件截断至0长，或为写而创建          | O_WRONLY\|O_CREAT\|O_TRUNC  |
+| a或ab        | 追加；为在文件尾写而打开，或为写而创建 | O_WRONLY\|O_APPEND\|O_CREAT |
+| r+或r+b或rb+ | 为读和写而打开                         | O_RDWR                      |
+| w+或w+b或wb+ | 把文件截至0长，或为读和写而打开        | O_RDWR\|O_CREAT\|O_TRUNC    |
+| a+或a+b或ab+ | 为在文件尾读和写打开或创建             | O_RDWR\|O_CREAT\|O_APPEND   |
+
+  
+
+fdopen为写而打开并不截断该文件。另外，标准IO追加写方式也不能用于创建该文件。  
+
+  
+
+当以读和写类型打开一个文件时(type中带+号)，具有下列限制。
+
+- 如果中间没有fflush、fseek、fsetpos或rewind，则在输出后面不能直接跟随输入。
+- 如果中间没有fseek、fsetpos或frewind，或者一个输入操作没有到达文件尾端，则在输入操作后不能直接跟随输出。
+
+| 限制               | r    | w    | a    | r+   | w+   | a+   |
+| ------------------ | ---- | ---- | ---- | ---- | ---- | ---- |
+| 文件必须存在       | *    |      |      | *    |      |      |
+| 放弃文件以前的内容 |      | *    |      |      | *    |      |
+| 流可以读           | *    |      |      | *    | *    | *    |
+| 流可以写           |      | *    | *    | *    | *    | *    |
+| 流只可在尾端处写   |      |      | *    |      |      | *    |
+
+  
+
+注意，在指定w或a类型创建一个新文件时，我们无法寿命该文件的访问权限位。POSIX.1要求使用如下的权限位集来创建文件：  
+
+S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH  
+
+  
+
+调用fclose关闭一个打开的流。  
+
+```c
+#include <stdio.h>
+
+int fclose(FILE* fp);
+/* 返回值：若成功，返回0；若失败，返回EOF */
+```
+
+  
+
+在该文件被关闭之前，冲洗缓冲区中的输出数据。缓冲区中的任何输入数据被丢弃。如果标准IO库已经为该流自动分配了一个缓冲区，则释放该缓冲器。  
+
+当一个进程正常终止时（直接调用exit函数，或从main函数返回），则所有未写缓冲数据的标准IO流都被冲洗，所有打开的标准IO流都被关闭。  
+
+  
+
+  
+
+  
+
+### 读和写流
+
+一旦打开了流，则可在3种不同类型的非格式化IO中进行选择，对其进行读、写操作。  
+
+1. 每次一个字符的IO。一次读或写一个字符，如果流是带缓冲的，则标准IO函数处理所有缓冲。  
+2. 每次一行的IO。如果想要一次读或写一行，则使用fgets和fputs。每行都以一个换行符终止。当调用fgets时，应说明能处理的最大行长。  
+3. 直接IO，fread和fwrite函数支持这种IO。每次IO操作读或写某种数量的对象，每个对象具有指定的长度。这两个函数常用于从二进制文件中每次读或写一个结构。   
+
+  
+
+#### 1. 输入函数
+
+以下3个函数可用以一次读一个字符。  
+
+```c
+#include <stdio.h>
+
+int getc(FILE* fp);
+int fgetc(FILE* fp);
+int getchar(void);
+/* 返回值：若成功，返回下一个字符；若已达文件尾端或出错，返回EOF */
+```
+
+  
+
+函数getchar等同于getc(stdin)。前两个函数的区别是，getc可被实现为宏，而fgetc不能实现为宏。这意味着以下几点：   
+
+1. getc的参数不应当是具有副作用的表达式，因为它可能会被计算多次。
+2. 因为fgetc一定是个函数，所以可以得到其地址。这就允许将fgetc的地址作为一个参数传送给另一个函数。
+3. 调用fgetc所需的时间可能比调用getc要长，因为调用函数所需的时间通常长于宏。
+
+  
+
+注意，不管是出错还是达到文件尾端，这3个函数都是返回同样的值。为了区分这两种情况，必须调用ferror或feof。  
+
+```c
+#include <stdio.h>
+
+int ferror(FILE* fp);
+int feof(FILE* fp);
+/* 两个函数返回值：若条件为真，返回0（真）；否则，返回非0（假） */
+void clearerr(FILE* fp);
+```
+
+  
+
+在大多数实现中，为每个流在FILE对象中维护了两个标志。  
+
+- 出错标志；
+- 文件结束标志。
+
+  
+
+调用clearerr可以清除这两个标志。  
+
+  
+
+从流中读取数据以后，可以调用ungetc将字符再压送回流中。  
+
+```c
+#include <stdio.h>
+
+int ungetc(int c, FILE* fp);
+/* 返回值：若成功，返回c；若出错，返回EOF */
+```
+
+压送回到流中的字符以后可又可以从流中读出，但读出字符的顺序与压送顺序相反。  
+
+回送的私服，不一定必须是上一次读的字符。不能回送EOF。但是当已经到达文件尾端时，仍可以回送一个字符。下次读将返回该字符，再读则返回EOF。原因是一次成功的ungetc调用会清除该流的文件结束标志。   
+
+  
+
+#### 2. 输出函数
+
+对应于上面所述的每个输入函数都有一个输出函数。
+
+```c
+#include <stdio.h>
+
+int putc(int c, FILE *fp);
+int fputc(int c, FILE* fp);
+int putchar(int c);
+/* 3个函数返回值：若成功，返回c；若出错，返回EOF */
+```
+
+与输入函数一样，putchar(c)等同于putc(c, stdout)，putc可被实现为宏，而fputc不能实现为宏。  
+
+  
+
+  
+
+  
+
+### 每次一行IO
+
+下面两个函数提供每次输入一行的功能。
+
+```c
+#include <stdio.h>
+
+char* fgets(char* restrict buf, int n, FILE* restrict fp);
+char* gets(char* buf);
+/* 两个函数返回值：若成功，返回buf；若已到达文件尾端或出错，返回NULL */
+```
+
+这两个函数都制定了缓冲区地址，读入的行将送入其中。fgets从标准输入读，而fgets则从制定的流读。  
+
+对于fgets，必须制定缓冲的长度n。此函数一直读到下一个换行符为止，但是不超过n-1个字符，读入的字符被送入缓冲区。该缓冲区以null字节结尾。如若改行包括最后一个换行符的字符数超过n-1，则fgets只会返回一个不完整的行，但是，缓冲区总是以null结尾。对fgets的下一次调用会继续执行。  
+
+gets是一个不推荐使用的函数。其问题是调用者在使用gets时不能制定缓冲区的长度。gets与fgets的另一个区别是，gets并不将换行符存入缓冲区中。  
+
+  
+
+fputs和puts提供每次输出一行的功能。  
+
+```c
+#include <stdio.h>
+
+int fputs(const char *restrict str, FILE* fp);
+int puts(const char* str);
+```
+
+函数fputs将一个以null字节终止的字符写到指定的流，尾端的终止符null不写出。注意，这不一定是每次输出一行，因为字符串不需要换行符作为最后一个非null字节。通常，在null字节之前是一个换行符，但并不要求总是如此。  
+
+  
+
+puts将一个以null字节终止的字符串写到标准输出，终止字符不写出。但是puts随后又将一个换行符写到标准输出。  
+
+  
+
+puts并不像它所对应的gets那样不安全。但是我们还是应避免使用它，以免需要记住它在最后是否添加了一个换行符。如果总是使用fgets和fputs，那么就会数值在每行终止处我们必须自己处理换行符。  
+
+  
+
+  
+
+  
+
+### 二进制IO
+
+```c
+#include <stdio.h>
+
+size_t fread(void* restrict ptr, size_t size, size_t nobj, FILE* restrict fp);
+size_t fwrite(const char* restrict ptr, size_t size, size_t nobj, FILE* restrict fp);
+/* 两个函数的返回值：读或写的对象数 */
+```
+
+这些函数由以下两个常见的用法。
+
+1. 读或写一个二进制数组。
+2. 读或写一个结构。
+
+  
+
+fread返回读或写的对象数。对于读，如果出错或到达文件尾端，则此数字可以少于nobj。在这种情况，应调用ferror或feof以判断究竟是哪一种情况。对于写，如果返回值小于所要求的nobj，则出错。  
+
+  
+
+使用二进制IO的基本问题是，它只能用于读在同一系统上已写的数据。常常有这种情景，在一个系统上写数据，要在另一个系统上进行处理，在这种环境下，这两个函数可能就不能正常工作，其原因是是：  
+
+1. 在一个结构中，统一成员的偏移量可能随编译程序和系统的不同而不同（由于不同的对齐要求）。
+2. 用来存储多字节整数和浮点数的二进制格式在不同系统结构件也可能不同。
+
+  
+
+  
+
+  
+
+### 定位流
+
+有3中方法定位标准IO流
+
+1. ftell和fseek函数。这两个函数自V7以来就存在了，但是他们都假定文件的位置可以存放在长整形中。
+2. ftello和fseeko函数。SUS引入了这两个函数，使文件偏移量可以不必一定使用长整形。他们使用off_t数据类型代替了长整形。
+3. fgetpos和fsetpos函数。这两个函数是由ISO C引入的。他们使用一个抽象数据类型fpos_t记录文件位置。这种数据类型可以根据需要定义为一个足够大的数，用以记录文件位置。
+
+  
+
+需要移植到非UNIX系统上运行的应用程序应当使用fgetpos和fsetpos。
+
+```c
+#include <stdio.h>
+
+long ftell(FILE* fp);
+/* 返回值：若成功，返回当前文件位置指示；若出错，返回-1L */
+int fseek(FILE* fp, long offset, int whence);
+/* 返回值：若成功，返回0；若出错，返回-1 */
+void rewind(FILE* fp);
+```
+
+  
+
+对于一个二进制文件，其文件位置指示器是从文件起始位置开始度量，并以字节为度量单位的。ftell用于二进制文件时，其返回值就是这种字节位置。为了用fseek定位一个二进制文件，必须制定一个字节offset，以及解释这种偏移量的方式whence的值与lseek函数的相同：SEEK_SET表示从文件的其实位置开始，SEEK_CUR表示从当前位置开始，SEEK_END表示从文件尾端开始。ISO C并不要求一个实现对二进制文件支持SEEK_END规格说明，其原因是某些系统要求二进制文件的长度是某个幻数的整数倍，结尾非实际内容部分则填充为0.但是在Unix系统中，对于二进制文件，则是支持SEEK_END的。  
+
+  
+
+对于文本文件，他们的文件当前位置可能不以简单的字节偏移量来度量。这主要也是在unix系统中，他们可能以不同的格式放文本文件。为了定位一个文本文件,whence一定要是SEEK_SET，而且offset只能由两种值：0（后退到文件的起始位置），或是对该文件的ftell所返回的值。使用rewind函数也可以将一个流设置到文件的起始位置。  
+
+  
+
+除了偏移量的类型是off_t而非long以外，ftello函数与ftell相同，fseeko函数与fseek相同。  
+
+```c
+#include <stdio.h>
+
+off_t ftello(FILE* fp);
+/* 返回值：若成功，返回当前文件位置；若出错，返回(off_t)-1 */
+int fseeko(FILE* fp, off_t offset, int whence);
+/* fanhuizhi：若成功，返回0；若失败，返回-1 */
+```
+
+可将off_t类型定义为长于32位。  
+
+  
+
+fgetpos和fsetpos两个函数是ISO C标准引入。  
+
+```c
+#include <stdio.h>
+
+int fgetpos(FILE* restrict fp, fpos_t *restrict pos);
+int fsetpos(FILE* fp, const fpos_t *pos);
+```
+
+fgetpos将文件位置指示器的当前值存入由pos指向的对象中。在以后调用fsetpos时，可以使用此值将流重新定位至该位置。  
+
+  
+
+  
+
+  
+
+### 格式化IO
+
+#### 1. 格式化输出
+
+格式化输出是由5个printf函数来处理的。  
+
+```c
+#include <stdio.h>
+
+int printf(const char* restrict format, ...);
+int fprintf(FILE* restrict fp, const char *restrict format, ...);
+int dprintf(int fd, const char* restrict format, ...);
+/* 3个函数返回值：若成功，返回输出字符数；若输出出错，返回负值 */
+int sprintf(char* restrict buf, const char* restrict format, ...);
+/* 返回值：若成功，返回存入数组的字符数；若编码出错，返回负值 */
+int snprintf(char* restrict buf, size_t , const char* restrict format, ...);
+/* 返回值：若缓冲区足够大，返回将要存入数组的字符数；若编码出错，返回负值 */
+```
+
+printf将格式化数据写到标准输出。fprintf写至指定的流，dprintf写至制定的文件描述符，sprintf将格式化的字符送入数组buf中。sprintf在数组的尾端自动加一个null字节，但该字符不包括在返回值中。  
+
+  
+
+下列5种printf族的辩题类似于上面的5种，但是可变参数表（...）替换成了arg。  
+
+```c
+#include <stdarg.h>
+#include <stdio.h>
+
+int vprintf(const char *restrict format, va_list arg);
+int vfprintf(FILE* restrict fp, const char* restrict format, va_list arg);
+int vdprintf(int fd, const char* restrict format, va_list arg);
+/* 3个函数返回值：若成功，返回输出字符数；若输出出错，返回负值 */
+int vsprintf(char* restrict buf, const char* restrict format, va_list arg);
+/* 返回值：若成功，返回存入数组的字符数；若编码出错，返回负值 */
+int vsnprintf(char* restrict buf, size_t , const char* restrict format, va_list arg);
+/* 返回值：若缓冲区足够大，返回将要存入数组的字符数；若编码出错，返回负值 */
+```
+
+  
+
+#### 2. 格式化输入
+
+执行格式化输入处理的是3个scanf函数。  
+
+```c
+#include <stdio.h>
+
+int scanf(const char× restrict format, ...);
+int fscanf(FILE* restrict fp, const char *restrict format, ...);
+int sscanf(const char* restrict buf, const char* restrict format, ...);
+/* 3个函数返回值：赋值的输入项数；若输入出错或在任一转换前已到达文件尾端，返回EOF */
+```
+
+scanf族用于分析输入字符串，并将字符序列转换成指定类型的变量。在格式之后的各参数包含了变量的地址，用转换结果对这些变量赋值。  
+
+  
+
+与printf族相同，scanf族也是用由<stdarg.h>说明的可变长度参数表。
+
+```c
+#include <stdarg.h>
+#include <stdio.h>
+
+int vscanf(const char× restrict format, va_list arg);
+int vfscanf(FILE* restrict fp, const char *restrict format, va_list arg);
+int vsscanf(const char* restrict buf, const char* restrict format, va_list arg);
+/* 3个函数返回值：赋值的输入项数；若输入出错或在任一转换前已到达文件尾端，返回EOF */
+```
+
+  
+
+  
+
+  
+
+### 实现细节
+
+如前所述，在Unix中，标准IO库最终要调用笔记1中说明的IO例程。每个标准IO流都有一个与其相关联的文件描述符，可对一个流调用fileno函数获得其描述符。
+
+> 注意，fileno不是ISO C标准部分，而是POSIX.1支持的扩展。
+
+```c
+#include <stdio.h>
+
+int fileno(FILE* fp);
+/* 返回值：与该流相关联的文件描述符 */
+```
+
+如果要调用dup或fcntl等函数，则需要此函数。  
+
+   
+
+  
+
+  
+
+### 临时文件
+
+ISO C标准IO库提供了两个函数以帮助创建临时文件。  
+
+```c
+#include <stdio.h>
+
+char* tmpnam(char* ptr);
+/* 返回值：指向唯一路径名的指针 */
+FILE* tmpfile(void);
+/* 返回值：若成功，返回文件指针；若出错，返回NULL */
+```
+
+tmpname函数生成一个与现有文件名不同的一个有效路径名字字符串。每次调用它时，都产生一个不同的路径名，最多调用次数是TMP_MAX。TMP_MAX定义在<stdio.h>中。  
+
+   
+
+若ptr是NULL，则所产生的路径名存放在一个静态区中，指向该静态区的指针作为函数值返回。后续调用tmpnam时，会重写该静态区（这意味着，如果我们调用此函数多次，而且想保存路径名，则我们应当保存该路径名的副本，而不知指针的副本）。ptr不是NULL，则认为它应该是指向长度至少是L_tmpnam个字符的数组（常量L_tmpnam定义在头文件<stdio.h>中）。所产生的路径名存放在该数组中。ptr作为函数值返回。  
+
+  
+
+tmpfile创建一个临时位二进制文件（类型wb+），在关闭该文件或程序结束时将自动删除这种文件。注意，Unix对二进制文件不进行特殊区分。  
+
+
+
+tmpfile函数进程使用的标准Unix技术是先调用tmpnam产生一个唯一的路径名，然后，用该路径名创建一个文件，并立即unlink它。对一个文件解除链接并不删除其内容，关闭该文件时才删除其内容。而关闭文件可以使显式的，也可以在程序终止时自动进行。  
+
+  
+
+SUS为处理临时文件定义了另外两个函数：mkdtemp和mkstemp，它们是XSI的扩展部分。  
+
+```c
+#include <stdlib.h>
+
+char *mkdtemp(char *template);
+/* 返回值：若成功，返回指向目录名的指针；若出错，返回NULL */
+int mkstemp(char *template);
+/* 返回值：若成功，返回文件描述符；若出错，返回-1 */
+```
+
+mkdtemp函数创建了一个目录，该目录有一个唯一的名字；mkstemp函数创建了一个文件，该文件由一个唯一的名字。名字是通过template字符串进行选择的。这个字符串是后6位设置为XXXXXX的路径名。函数将这些占位符替换成不同的字符串来构建成一个唯一的路径名。如果成功的话，这两个函数将修改template字符串反应临时文件的名字。  
+
+  
+
+由mkdtemp函数创建的目录使用下列访问权限集：S_IRUSR|S_IWUSR|S_IXUSR。注意，调用进程的文件模式创建屏蔽字可以进一步限制这些权限。如果目录创建成功，mkdtemp返回新目录的名字。  
+
+  
+
+mkstemp函数以唯一的名字创建一个普通文件并且打开该文件，该函数返回的文件名描述符以读写方式打开。由mkstemp创建的文件使用访问权限位S_IRUSR|S_IWUSR。  
+
+  
+
+与tmpfile不同，mkstemp创建的临时文件并不会自动删除。如果希望从文件系统命名空间中删除该文件，必须自己对它解除链接。  
+
+  
+
+  `
+
+  
+
+### 内存流
+
+在SUSv4中支持了内存流。这就是标准IO流，随人仍使用FILE指针进行访问，但其实并没有底层文件。所有的IO都是通过在缓冲区与驻村之间来回传送字节来完成的。我们将看到，即便这些流看起来像文件流，它们的某些特征使其更适用于字符串操作。  
+
+  
+
+有3个函数可用于内存流的创建，第一个是fmemopen函数。  
+
+```c
+#include <stdio.h>
+
+FILE* fmemopen(void* restrict buf, size_t size, const char *restrict type);
+/* 返回值：若成功，返回流指针；若错误，返回NULL */
+```
+
+fmemopen函数允许调用者提供缓冲区用于内存流：buf参数指向内存区的开始位置，size参数指定了缓冲区大小的字节数。如果buf参数为空，fmemopen函数分配size字节数的缓冲区。在这种情况下，当流关闭时缓冲区会被释放。  
+
+  
+
+用于创建内存流的其他两个函数分别是open_memstream和open_wmemstream。  
+
+```c
+#include <stdio.h>
+FILE* open_memstream(char** bufp, size_t* sizep);
+#include <wchar.h>
+FILE* open_wmemstream(wchar_t **bufp, size_t* sizep);
+/* 两个函数的返回值：若成功，返回流指针；若出错，返回NULL */
+```
+
+open_memstream函数创建的流是面向字节的。open_wmemstream函数创建的流是面向款字节的。这两个函数与fmemopen函数的不同在于。  
+
+- 创建的流只能写打开；
+- 不能制定自己的缓冲区，但可以分别通过bufp和sizep参数访问缓冲区地址和大小；
+- 关闭流后需要自行释放缓冲区；
+- 对流添加字节会增加缓冲区大小。
+
+但是在缓冲区地址和大小的使用上必须遵循一些原则。第一，缓冲区地址和长度只有在调用fclose或fflush后才有效；第二，这些值只有在下一次流写入或调用fclose前才有效。因为缓冲区增长，可能需要重新分配。如果出现这种情况，我们会发现缓冲区的内存地址值在下一次调用fclose或fflush时会改变。  
+
+  
+
+因为避免了缓冲区溢出，内存刘非常适合用于创建字符串。因为内存流只访问驻村，不访问磁盘上的文件，所以对于把标准IO流作为参数用于临时文件的函数来说，会有很大的性能提升。
+
+
+
+
+
+
+
+
+
